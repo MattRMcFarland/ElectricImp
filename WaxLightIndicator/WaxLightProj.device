@@ -1,0 +1,197 @@
+// Matt McFarland
+// Feb 2015, Electric Imp Wax Light project
+// device code 
+
+const SPICLK = 100;    // kHz
+
+server.log("Device online at "+date()); 
+
+// configure SPI communications to Grove Chainable RGB LED
+// on April breakoutboard, pin 8 is MOSI for spi 189
+hardware.spi189.configure( SIMPLEX_TX | MSB_FIRST | CLOCK_IDLE_LOW, SPICLK);
+
+// Set pin as snow indicator LED pin sink
+snowled <- hardware.pin2;
+
+// Set pin as wind chill indicator LED pin sink
+wcled <- hardware.pin5;
+ 
+// configure snow led to be a digital output
+snowled.configure(DIGITAL_OUT, 0);
+
+// configure wc warning led as a pwm led output
+wcled.configure(PWM_OUT, 1.0/400.0, 0.0);
+
+/*
+ * Sets RGB Led to colors specified in arguments (0-255)
+ */
+function setcolor( blue, green, red){
+    // send a 32 bit value
+    local tosend = blob(4);
+    local clearblob = blob(4);
+    clearblob.writen(0x00000000,'i');
+    
+    tosend.seek( 0, 'b');
+    
+    // first byte = 1 1 B7' B6' G7' G6' R7' R6'
+    tosend.writen( 0xc0 | (0x30 & (~blue >> 2)) | (0x0c & (~green >> 4)) | (0x03 & (~red >> 6)), 'b' );
+
+    // second byte = uint8 blue
+    if( blue > 255 ){
+        tosend.writen( 255, 'b');
+    }
+    else if( blue < 0 ){
+        tosend.writen( 0, 'b');
+    }
+    else{
+        tosend.writen(blue, 'b');
+    }
+    
+    
+    // thirdbyte = uint8 green
+    if( green > 255 ){
+        tosend.writen( 255, 'b');
+    }
+    else if( green < 0 ){
+        tosend.writen( 0, 'b');
+    }
+    else{
+        tosend.writen( green, 'b');
+    }
+    
+    // fourthbyte = uint8 red
+    if( red > 255 ){
+        tosend.writen( 255, 'b');
+    }
+    else if( red < 0 ){
+        tosend.writen( 0, 'b');
+    }
+    else{
+        tosend.writen(red, 'b'); 
+    }
+
+    /* debug */
+    //server.log("about to send data");
+    //server.log(tosend);
+    
+    tosend.seek( 0, 'b');
+    
+    hardware.spi189.write(clearblob);
+    hardware.spi189.write(tosend);
+    hardware.spi189.write(clearblob);
+}
+
+/*
+ * Handles weather conditions.
+ * Sinks LED current on Snow LED if snowing
+ */
+function handleweather( weather ){
+    
+    /* debug */
+    //server.log("Handling Weather "+weather);
+    
+    if( weather.find("Snow") != null ){
+        snowled.write(0);
+    }
+    else{
+        snowled.write(1);
+    }
+}
+
+/*
+ * Handles temperature.
+ * Writes appropriate color to RGB LED
+ */
+function handletemp( temp ){
+    
+    /* debug */
+    //server.log("Handling Temperature "+temp);
+    
+    if( temp > 32 ){
+        setcolor( 0, 255, 255);     // YELLOW
+    }
+    else if( temp > 28 ){
+        setcolor( 0, 0 , 255);      // RED
+    }
+    else if( temp > 23 ){
+        setcolor( 255, 0, 255);     // PURPLE
+    }
+    else if( temp > 11 ){
+        setcolor( 255, 0 , 0);      // BLUE
+    }
+    else{ /* conditions.tmp < 11 */
+        setcolor( 0, 255, 0);       // GREEN
+    }
+   
+}
+
+/*
+ * Handles wind chill data
+ * Varies intensity of windchill LED according to windchill
+ *
+ * At 10F, the led is unlit
+ * At -20F, the led is fully lit
+ * The led intensity linearly varies from 10 to -20 F
+ */
+function handlewc( windchill ){
+    
+    /* debug */
+    //server.log("Handling Windchill "+windchill);
+    try {
+        local towrite;
+        if( windchill != "NA" ){
+            local rec = windchill.tofloat();
+    
+            if( rec > 10.0 ){
+                wcled.write(1.0);       // led off
+            }
+            else if( rec < -20.0 ){
+                wcled.write(0.0);       // led on
+            }
+            else{
+                // map temp to PWM intensity
+                towrite = rec/21 + 0.524;
+        
+                /* debug */
+                //server.log("PWM value "+towrite);
+        
+                wcled.write(towrite);
+            }            
+        }
+        else{
+            /* debug */
+            ;//server.log("Windchill is NA");
+        }
+
+    }
+    catch (e) {
+        server.error("Error Handling windchill string "+e);
+    }
+}
+
+// handle conditions from agent
+agent.on("weather", handleweather );
+agent.on("temp", handletemp );
+agent.on("windchill", handlewc);
+//agent.on("wind",handlewind);      // not implemented
+
+// starting color sequence
+setcolor(255,255,255);  // white
+imp.sleep(1);
+setcolor(255,0,0);  // blue
+imp.sleep(1);
+setcolor(0,255,0);  // green
+imp.sleep(1);
+setcolor(0,0,255);  // red
+imp.sleep(1);
+
+// turn off all LEDs until conditions are updated
+setcolor(0,0,0);
+wcled.write(1.0);
+snowled.write(1);
+
+server.log("Device connected");
+
+// get conditions from agent
+agent.send("start", null );
+
